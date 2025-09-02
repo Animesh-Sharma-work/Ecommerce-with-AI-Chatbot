@@ -1,0 +1,1 @@
+# apps/chat/serializers.py

@@ -1,0 +1,70 @@
+// src/components/ProductCard.tsx
+
+import { useDispatch } from "react-redux";
+import { Link } from "react-router-dom";
+import { addToCart } from "../features/cart/cartSlice";
+import type { Product } from "../types";
+import { ShoppingCart } from "lucide-react";
+
+export function ProductCard({ product }: ProductCardProps) {
+  const dispatch = useDispatch();
+
+  const handleAddToCart = (e: React.MouseEvent) => {
+    //  Stop the click from bubbling up to the Link
+    e.stopPropagation();
+    e.preventDefault();
+    dispatch(addToCart(product));
+  };
+
+  return (
+    <Link
+      to={`/product/${product.id}`}
+      className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden group flex flex-col"
+    >
+      {/* 
+        THE FIX IS HERE:
+        - We return to a fixed-height container.
+        - The image inside uses 'object-contain' to ensure it's fully visible.
+        - A subtle background color on the container handles any letterboxing.
+      */}
+      <div className="relative h-48 w-full overflow-hidden bg-gray-50 flex-shrink-0">
+        <img
+          src={product.image}
+          alt={product.name}
+          className="h-full w-full object-contain group-hover:scale-105 transition-transform duration-300"
+        />
+      </div>
+
+      {/* Content Container */}
+      <div className="p-3 flex flex-col flex-grow">
+        <span className="inline-block bg-gray-100 text-gray-800 text-xs px-2 py-0.5 rounded-full mb-2 self-start">
+          {product.category}
+        </span>
+
+        <h3
+          className="text-base font-semibold text-gray-900 mb-1 truncate"
+          title={product.name}
+        >
+          {product.name}
+        </h3>
+
+        <div className="mt-auto flex items-center justify-between pt-2">
+          <p className="text-lg font-bold text-gray-900">${product.price}</p>
+
+          <button
+            onClick={handleAddToCart}
+            className="flex items-center gap-1 bg-blue-600 text-white text-xs font-bold px-3 py-2 rounded-md hover:bg-blue-700 transition-colors"
+            aria-label={`Add ${product.name} to cart`}
+          >
+            <ShoppingCart size={14} />
+            <span>Add to Cart</span>
+          </button>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+interface ProductCardProps {
+  product: Product;
+}
