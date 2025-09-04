@@ -228,7 +228,7 @@ export const apiSlice = createApi({
     //  Add the new mutation for AI content generation
     generateProductContent: builder.mutation<
       AIGeneratedContent,
-      { name: string; category: string }
+      { name: string; category: string; image: string }
     >({
       query: (productInfo) => ({
         url: "/products/admin/generate-content/",

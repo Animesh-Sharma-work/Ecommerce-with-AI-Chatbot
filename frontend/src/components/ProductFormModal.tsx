@@ -7,6 +7,51 @@ import {
   useGenerateProductContentMutation,
 } from "../features/api/apiSlice";
 
+// Defines the expected structure of a validation error from our API.
+interface ApiError {
+  data: {
+    error: string;
+  };
+}
+
+// // A "type guard" function to safely check if an unknown error is an ApiError.
+// function isApiError(error: unknown): error is ApiError {
+//   return (
+//     typeof error === "object" &&
+//     error !== null &&
+//     "data" in error &&
+//     typeof (error as any).data === "object" &&
+//     "error" in (error as any).data
+//   );
+// }
+
+/**
+ * A robust, type-safe "type guard" to check if an unknown error is an ApiError.
+ * This function satisfies strict linting rules by avoiding 'any' casts. It checks
+ * each property's existence and type before trying to access nested properties.
+ * This is the standard way to solve the "Unexpected any" error in a catch block.
+ */
+function isApiError(error: unknown): error is ApiError {
+  // 1. Ensure the error is an object and not null.
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  // 2. Check if the 'data' property exists on the error object.
+  if (!("data" in error)) {
+    return false;
+  }
+
+  // 3. We can now safely assume 'data' exists. Let's check its contents.
+  const data = (error as { data: unknown }).data;
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "error" in data &&
+    typeof (data as { error: unknown }).error === "string"
+  );
+}
+
 interface ProductFormModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -22,8 +67,11 @@ export function ProductFormModal({
   productToEdit,
   isLoading = false,
 }: ProductFormModalProps) {
+  // RTK Query hooks for fetching categories and generating content
   const { data: paginatedCategories, isLoading: isLoadingCategories } =
     useGetCategoriesQuery();
+  const [generateContent, { isLoading: isGenerating }] =
+    useGenerateProductContentMutation();
 
   const [formData, setFormData] = useState<ProductFormData>({
     name: "",
@@ -38,14 +86,13 @@ export function ProductFormModal({
     ai_tags: "",
   });
 
-  // Add state to specifically handle the 'new category' text input
+  // State for the "new category" input field
   const [newCategory, setNewCategory] = useState("");
+  // State to hold and display the AI validation error message
+  const [validationError, setValidationError] = useState<string | null>(null);
 
-  //  Initialize the mutation hook
-  const [generateContent, { isLoading: isGenerating }] =
-    useGenerateProductContentMutation();
-
-  // When the modal opens, populate the form if we are editing a product
+  // This effect runs when the modal is opened or the product to edit changes.
+  // It populates the form for editing or resets it for creating a new product.
   useEffect(() => {
     if (productToEdit) {
       setFormData(productToEdit);
@@ -66,10 +113,13 @@ export function ProductFormModal({
       });
       setNewCategory("");
     }
+    setValidationError(null); // Reset validation error when modal opens/changes
   }, [productToEdit, isOpen]);
 
+  // Don't render the component if it's not open
   if (!isOpen) return null;
 
+  // Generic handler for updating form state from input changes
   const handleChange = (
     e: React.ChangeEvent<
       HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
@@ -86,6 +136,7 @@ export function ProductFormModal({
     }));
   };
 
+  // Specific handler for the "new category" text input
   const handleNewCategoryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { value } = e.target;
     setNewCategory(value);
@@ -95,22 +146,19 @@ export function ProductFormModal({
     }
   };
 
-  //  Create the handler for the AI button
+  //  Handles the "Generate with AI" button click
   const handleGenerateContent = async () => {
+    setValidationError(null); // Clear previous errors before making new request
     const category = newCategory.trim() || formData.category;
-    if (!formData.name || !category) {
-      alert(
-        "Please enter a Product Name and select a Category before generating content."
-      );
-      return;
-    }
 
     try {
+      // Call the mutation. .unwrap() will throw an error if the request fails.
       const aiContent = await generateContent({
         name: formData.name,
         category,
+        image: formData.image,
       }).unwrap();
-      // 4. Update the form state with the AI's response
+      // 4. On success, Update the form state with the AI's response
       setFormData((prev) => ({
         ...prev,
         description: aiContent.description, // Use ai_description from backend if you changed the field name
@@ -123,8 +171,16 @@ export function ProductFormModal({
       // We'll also need to add inputs for the new meta fields
       alert("AI content generated and populated!");
     } catch (err) {
-      console.error("Failed to generate AI content:", err);
-      alert("An error occurred while generating content.");
+      // On failure, use our type guard to safely check the error structure
+      if (isApiError(err)) {
+        // If it's a known API error, display the specific message from the backend
+        setValidationError(err.data.error);
+      } else {
+        // Otherwise, show a generic error message
+        setValidationError(
+          "An unknown error occurred while generating content."
+        );
+      }
     }
   };
 
@@ -145,6 +201,10 @@ export function ProductFormModal({
     onSave(finalFormData);
   };
 
+  // Determines if the "Generate with AI" button should be enabled
+  const canGenerate =
+    formData.name && (formData.category || newCategory) && formData.image;
+
   return (
     <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex justify-center items-center p-4">
       <div className="bg-gray-800 text-white rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -155,12 +215,23 @@ export function ProductFormModal({
           <button
             type="button"
             onClick={handleGenerateContent}
-            disabled={isGenerating}
+            disabled={isGenerating || !canGenerate}
             className="flex items-center gap-2 text-sm bg-purple-600 hover:bg-purple-700 text-white font-bold px-3 py-2 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             ✨ {isGenerating ? "Generating..." : "Generate with AI"}
           </button>
         </div>
+
+        {/* This block conditionally renders the validation error message from the AI */}
+        {validationError && (
+          <div
+            className="bg-yellow-900 border border-yellow-600 text-yellow-200 px-4 py-3 rounded-md relative mb-4 text-sm"
+            role="alert"
+          >
+            <strong className="font-bold">Validation Failed: </strong>
+            <span className="block sm:inline">{validationError}</span>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* --- Core Product Details --- */}
@@ -178,6 +249,7 @@ export function ProductFormModal({
               value={formData.image}
               onChange={handleChange}
               placeholder="Image URL"
+              required
               className="w-full p-2 bg-gray-700 rounded"
             />
           </div>
@@ -209,6 +281,7 @@ export function ProductFormModal({
                 value={formData.category}
                 onChange={handleChange}
                 className="w-full p-2 bg-gray-700 rounded"
+                required={!newCategory} // The dropdown is only required if the text input is empty
               >
                 <option value="" disabled>
                   {isLoadingCategories ? "Loading..." : "-- Select Category --"}

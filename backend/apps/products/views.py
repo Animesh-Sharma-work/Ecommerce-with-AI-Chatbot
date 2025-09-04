@@ -66,16 +66,18 @@ class CategoryListView(generics.ListAPIView):
 class GenerateAIContentView(APIView):
     """
     An admin-only view to generate product content using the Gemini API.
+    It validates if the product name and image are related by passing the URL directly to the model.
     """
     permission_classes = [permissions.IsAdminUser]
 
     def post(self, request, *args, **kwargs):
         product_name = request.data.get('name')
         category_name = request.data.get('category')
+        image_url = request.data.get('image')
 
-        if not product_name or not category_name:
+        if not all([product_name, category_name, image_url]):
             return Response(
-                {'error': 'Product name and category are required.'},
+                {'error': 'Product name, category and image url are required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -85,18 +87,39 @@ class GenerateAIContentView(APIView):
 
             # Craft a detailed prompt for the AI
             prompt = f"""
-            You are a professional e-commerce copywriter. Generate content for a product with the following details:
+            You are an e-commerce product analyst. Your task is to perform two steps:
+            1.  **Validation**: Analyze the user-provided image from the URL and the product name to determine if they are a plausible match for the same product listing.
+            2.  **Content Generation**: If they match, generate marketing content.
+
+            **Product Details:**
             - Product Name: "{product_name}"
             - Category: "{category_name}"
+            - Image URL: "{image_url}"
 
-            Provide the output in a clean, parsable JSON format with the following keys:
-            - "description": A compelling, user-friendly product description (around 50-70 words).
-            - "meta_title": A concise and SEO-friendly meta title (around 50-60 characters).
-            - "meta_description": An engaging SEO meta description (around 150-160 characters).
-            - "keywords": A comma-separated list of 5-7 relevant SEO keywords.
-            - "tags": A comma-separated list of 5-7 relevant tags for product recommendations (e.g., style, material, target audience, features).
+            **Validation Rules:**
+            - Your primary goal is to check if the CORE OBJECT in the image matches the CORE OBJECT in the product name.
+            - Be flexible with subjective terms. For example, if the name is "Classic Bag" and the image is a "Stylish Handbag", this IS a match because the core object is a bag.
+            - Similarly, "Leather Ankle Boots" and an image of brown boots IS a match.
+            - A mismatch should only be for clear, undeniable errors. For example, a product named "Laptop" with an image of a shoe IS NOT a match.
+            - The goal is to prevent major category errors, not to police minor stylistic variations.
 
-            Do not include any text or formatting outside of the JSON object.
+            **Required Output Format:**
+            Your final output must be a single, clean JSON object. Do not include any text or formatting outside of this JSON object.
+
+            **JSON Structure:**
+            {{
+              "validation": {{
+                "match": boolean,
+                "reason": "In case of mismatch just say "The uploaded image does not appear to match the product name. Please ensure the correct image is uploaded for the name provided. Suggested name - (suggest a name from your thinking)", or 'OK' if they match."
+              }},
+              "content": {{
+                "description": "A compelling, user-friendly product description (around 50-70 words).",
+                "meta_title": "A concise and SEO-friendly meta title (around 50-60 characters).",
+                "meta_description": "An engaging SEO meta description (around 150-160 characters).",
+                "keywords": "A comma-separated list of 5-7 relevant SEO keywords.",
+                "tags": "A comma-separated list of 5-7 relevant tags for product recommendations."
+              }} | null
+            }}
             """
 
             # Make the API call to Gemini
@@ -106,12 +129,27 @@ class GenerateAIContentView(APIView):
             response_text = response.text.strip().replace('```json', '').replace('```', '')
             ai_data = json.loads(response_text)
 
-            # Validate that the response contains the keys we expect
-            required_keys = ['description', 'meta_title', 'meta_description', 'keywords', 'tags']
-            if not all(key in ai_data for key in required_keys):
-                raise ValueError("AI response is missing required keys.")
+           # Validates if the Image and Product name matches
+            validation_result = ai_data.get('validation', {})
+            if not validation_result.get('match'):
+                return Response(
+                    {'error': validation_result.get('reason', 'Image and product name do not match.')},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-            return Response(ai_data, status=status.HTTP_200_OK)
+            content = ai_data.get('content')
+
+             # Validate that the response contains the keys we expect
+            if not content:
+                raise ValueError("AI validation passed, but the 'content' block is missing or null.")
+
+            required_keys = ['description', 'meta_title', 'meta_description', 'keywords', 'tags']
+            missing_keys = [key for key in required_keys if key not in content]
+
+            if missing_keys:
+                raise ValueError(f"AI response is missing required content fields: {', '.join(missing_keys)}")
+
+            return Response(content, status=status.HTTP_200_OK)
 
         except Exception as e:
             # Handle potential errors from the API call or JSON parsing
