@@ -1,4 +1,4 @@
-// src/components/ChatWidget.tsx - FINAL Version with Auth Error Handling
+// src/components/ChatWidget.tsx - FINAL CORRECTED VERSION
 
 import { useState, useEffect, useRef } from "react";
 import useWebSocket, { ReadyState } from "react-use-websocket";
@@ -7,78 +7,75 @@ import {
   selectToken,
   selectCurrentUser,
   logout,
-} from "../features/auth/authSlice"; // Import logout
+} from "../features/auth/authSlice";
 import { addMessage, setConversation } from "../features/chat/chatSlice";
-import { useGetMessageHistoryQuery } from "../features/api/apiSlice";
+// --- FIX: REMOVE THE UNUSED IMPORT ---
+// import { useGetMessageHistoryQuery } from "../features/api/apiSlice";
 import { MessageSquare, X } from "lucide-react";
 import type { Message } from "../types";
 import type { RootState } from "../app/store";
+import ReactMarkdown from "react-markdown";
 
 export function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
   const [newMessage, setNewMessage] = useState("");
-  const [authError, setAuthError] = useState<string | null>(null); // State for auth errors
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const dispatch = useDispatch();
   const token = useSelector(selectToken);
   const currentUser = useSelector(selectCurrentUser);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const connectionOpened = useRef(false); // Track if connection was ever successful
+  const connectionOpened = useRef(false);
 
   const userId = currentUser?.user_id;
 
-  const { data: paginatedHistory } = useGetMessageHistoryQuery(userId!, {
-    skip: !userId || !isOpen, // Also skip if the widget isn't open
-  });
-
-  useEffect(() => {
-    if (paginatedHistory && userId) {
-      dispatch(setConversation({ userId, messages: paginatedHistory.results }));
-    }
-  }, [paginatedHistory, userId, dispatch]);
+  // --- FIX: REMOVE THE OBSOLETE useGetMessageHistoryQuery HOOK AND EFFECT ---
+  // The backend now sends history on connect, so this HTTP fetch is no longer needed.
 
   const messageHistory = useSelector((state: RootState) =>
     userId ? state.chat.conversations[userId] || [] : []
   );
+
+  // Clear conversation history when widget opens to avoid showing old data
+  useEffect(() => {
+    if (isOpen && userId) {
+      dispatch(setConversation({ userId, messages: [] }));
+    }
+  }, [isOpen, userId, dispatch]);
 
   const socketUrl = `ws://127.0.0.1:8000/ws/chat/?token=${token}`;
   const { sendMessage, lastMessage, readyState } = useWebSocket(socketUrl, {
     shouldReconnect: () => true,
     onOpen: () => {
       console.log("WebSocket connection established");
-      connectionOpened.current = true; // Mark that we've connected successfully
+      connectionOpened.current = true;
       setAuthError(null);
     },
   });
 
-  // --- NEW: EFFECT TO HANDLE AUTHENTICATION FAILURE ---
   useEffect(() => {
-    // If the connection closes AND it was never successfully opened,
-    // it's highly likely an authentication failure (e.g., expired token).
     if (readyState === ReadyState.CLOSED && !connectionOpened.current) {
       console.error(
-        "WebSocket connection failed. This could be due to an expired token."
+        "WebSocket connection failed. Potentially an expired token."
       );
       setAuthError(
         "Connection failed. Your session may have expired. Please log in again."
       );
-      // Optional: Force logout after a short delay
       const timer = setTimeout(() => {
         dispatch(logout());
       }, 5000);
       return () => clearTimeout(timer);
     }
   }, [readyState, dispatch]);
-  // --- END OF NEW EFFECT ---
 
+  // This useEffect now handles BOTH historical and new messages from the stream
   useEffect(() => {
     if (lastMessage !== null && userId) {
       const messageData: Message = JSON.parse(lastMessage.data);
-      if (messageData.user !== currentUser?.email) {
-        dispatch(addMessage({ userId, message: messageData }));
-      }
+      // The user for our own messages is our email, so we dispatch all messages received.
+      dispatch(addMessage({ userId, message: messageData }));
     }
-  }, [lastMessage, userId, currentUser?.email, dispatch]);
+  }, [lastMessage, userId, dispatch]);
 
   useEffect(() => {
     if (isOpen) {
@@ -92,7 +89,7 @@ export function ChatWidget() {
       sendMessage(JSON.stringify({ message: newMessage }));
       const optimisticMessage: Message = {
         id: Date.now(),
-        user: currentUser.email,
+        user: currentUser.email, // Optimistically show our own message
         message: newMessage,
         timestamp: new Date().toISOString(),
       };
@@ -119,7 +116,6 @@ export function ChatWidget() {
             <p className="text-xs text-blue-200">{connectionStatus}</p>
           </div>
           <div className="flex-1 p-4 overflow-y-auto bg-gray-50">
-            {/* --- NEW: DISPLAY AUTH ERROR --- */}
             {authError && (
               <div className="p-2 my-2 text-center text-sm bg-red-100 text-red-700 rounded">
                 {authError}
@@ -143,7 +139,7 @@ export function ChatWidget() {
                       : "bg-gray-200 text-gray-800"
                   }`}
                 >
-                  {msg.message}
+                  <ReactMarkdown>{msg.message}</ReactMarkdown>
                 </div>
               </div>
             ))}

@@ -6,6 +6,10 @@ export interface Product {
   price: string; // DRF DecimalField serializes to a string
   quantity: number;
   image: string;
+  ai_meta_title?: string | null;
+  ai_meta_description?: string | null;
+  ai_keywords?: string | null;
+  ai_tags?: string | null;
 }
 
 export interface CartItem {
@@ -36,7 +40,7 @@ export interface ProductFormData {
   price: string;
   quantity: number;
   description: string;
-  image: string;
+  image: File | string | null;
   ai_meta_title?: string;
   ai_meta_description?: string;
   ai_keywords?: string;

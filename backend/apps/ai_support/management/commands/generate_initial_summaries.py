@@ -55,7 +55,7 @@ class Command(BaseCommand):
         """
 
         try:
-            llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=settings.GEMINI_API_KEY)
+            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=settings.GEMINI_API_KEY)
             ai_response = await llm.ainvoke(prompt)
             summary_text = ai_response.content.strip()
 

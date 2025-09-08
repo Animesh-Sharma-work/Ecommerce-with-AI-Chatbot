@@ -44,6 +44,7 @@ AUTH_USER_MODEL = 'users.CustomUser'
 INSTALLED_APPS = [
     'daphne',      # Add Daphne here, at the very top
     'channels',
+    'pgvector',
     
     'django.contrib.admin',
     'django.contrib.auth',
@@ -62,11 +63,13 @@ INSTALLED_APPS = [
     'apps.chat.apps.ChatConfig', 
   
     'apps.ai_support.apps.AiSupportConfig',
+    'apps.doc_qa.apps.DocQaConfig',
    
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware', 
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'corsheaders.middleware.CorsMiddleware',
@@ -199,13 +202,27 @@ LOGGING = {
         },
     },
     'loggers': {
+        # This is your existing logger for the chat app
         'apps.chat.consumers': {
             'handlers': ['console'],
             'level': 'INFO',
         },
+        # This is your existing logger for the AI support app
         'apps.ai_support.signals': {
             'handlers': ['console'],
             'level': 'INFO',
         },
+        # --- THIS IS THE NEW ADDITION ---
+        # This new entry tells Django to capture logs from your new doc_qa signals
+        # and print them to the console.
+        'apps.doc_qa.signals': {
+            'handlers': ['console'],
+            'level': 'INFO', # Captures INFO, WARNING, ERROR, etc.
+        },
     },
 }
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# Add this setting to tell WhiteNoise where to find static files
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')

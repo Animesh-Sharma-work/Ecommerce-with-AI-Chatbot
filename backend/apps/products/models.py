@@ -19,7 +19,7 @@ class Product(models.Model):
     description = models.TextField(blank=True) # blank=True means this field is not required
     price = models.DecimalField(max_digits=10, decimal_places=2)
     quantity = models.PositiveIntegerField(default=0, help_text="The available stock quantity.")
-    image = models.URLField(max_length=1024, null=True, blank=True, help_text="URL to the product image.")
+    image = models.ImageField(upload_to='products/', null=True, blank=True, help_text="Product image file.")
     
     ai_meta_title = models.CharField(max_length=255, blank=True, null=True, help_text="AI-generated SEO meta title.")
     ai_meta_description = models.TextField(blank=True, null=True, help_text="AI-generated SEO meta description.")

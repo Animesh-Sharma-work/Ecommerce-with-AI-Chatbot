@@ -1,0 +1,25 @@
++Shipping Policy
+This Shipping Policy outlines the terms and conditions for product deliveries made through our e-commerce platform. By purchasing from our store, you agree to the following policies.
+1. Delivery Options
+    • Standard Shipping: Orders are delivered within 3–7 business days, excluding weekends and public holidays.
+    • Express Shipping: Expedited delivery within 1–3 business days for eligible pin codes.
+    • Guaranteed Delivery: If a guaranteed delivery date is displayed at checkout and the order is not delivered on time, shipping charges may be refunded.
+2. Estimated Delivery & Tracking
+    • Delivery estimates are calculated based on product availability, location, and shipping method.
+    • Tracking details are shared once the product is shipped.
+3. Serviceability & Restrictions
+    • Customers must provide a valid postal code at checkout to verify service availability.
+    • Some products may not be eligible for shipping due to size, weight, or regulatory restrictions.
+4. Shipping Fees & Charges
+    • Shipping fees are calculated at checkout based on order value, product weight, and delivery location.
+    • Orders under 500g within local or zonal areas may qualify for free or reduced shipping fees.
+5. Returns & Replacements
+    • Eligible products may be returned or replaced within the period specified on the product page.
+    • Damaged or incorrect items must be reported immediately upon delivery. Open-box inspection may be available in select regions.
+    • Some brands may require customers to contact authorized service centers directly.
+6. Fulfillment Options (For Sellers)
+    • Platform Fulfillment: We handle warehousing, packaging, and shipping on behalf of sellers.
+    • Self-Shipment: Sellers can ship products using approved logistics partners and packaging standards.
+7. Terms of Use
+    • By using our services, you agree to comply with local laws and platform guidelines.
+    • We reserve the right to update this policy at any time without prior notice.

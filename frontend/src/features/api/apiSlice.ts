@@ -1,7 +1,6 @@
-// src/features/api/apiSlice.ts - FINAL VERSION WITH TOKEN REFRESH
+// src/features/api/apiSlice.ts - CORRECTED AND CLEANED
 
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
-// 1. Import the necessary types for the re-authentication wrapper
 import type {
   BaseQueryFn,
   FetchArgs,
@@ -15,26 +14,33 @@ import type {
   ProductFormData,
   Order,
   PaginatedResponse,
-  Message,
   AIGeneratedContent,
   Review,
   ProductInventoryInsight,
 } from "../../types";
 import type { RootState } from "../../app/store";
-import { setToken } from "../auth/authSlice"; // 2. Import the setToken action
+import { setToken } from "../auth/authSlice";
 
-// Define a type for our token response
+// Type definitions...
 interface AuthResponse {
   refresh: string;
   access: string;
 }
 
-interface ChatUser {
-  id: number;
-  email: string;
+interface GenerateContentInput {
+  name: string;
+  category: string;
+  image: File;
 }
 
-// 3. Define the original base query
+export interface Document {
+  id: number;
+  original_filename: string;
+  // status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+  uploaded_at: string;
+  user_email: string;
+}
+
 const baseQuery = fetchBaseQuery({
   baseUrl: "http://127.0.0.1:8000/api",
   prepareHeaders: (headers, { getState }) => {
@@ -46,20 +52,15 @@ const baseQuery = fetchBaseQuery({
   },
 });
 
-// 4. Create the wrapper function that adds the re-authentication logic
 const baseQueryWithReauth: BaseQueryFn<
   string | FetchArgs,
   unknown,
   FetchBaseQueryError
 > = async (args, api, extraOptions) => {
   let result = await baseQuery(args, api, extraOptions);
-
-  // If we receive a 401 error, it means our access token is expired
   if (result.error && result.error.status === 401) {
     const refreshToken = (api.getState() as RootState).auth.refreshToken;
-
     if (refreshToken) {
-      // Try to get a new access token using the refresh token
       const refreshResult = await baseQuery(
         {
           url: "/auth/token/refresh/",
@@ -69,29 +70,29 @@ const baseQueryWithReauth: BaseQueryFn<
         api,
         extraOptions
       );
-
       if (refreshResult.data) {
-        // If we get a new token, update the Redux store
-        const newTokens = refreshResult.data as AuthResponse;
-        api.dispatch(setToken(newTokens));
-
-        // Retry the original request that failed
+        api.dispatch(setToken(refreshResult.data as AuthResponse));
         result = await baseQuery(args, api, extraOptions);
       }
-      // If the refresh fails, the user will be logged out by other logic
     }
   }
-
   return result;
 };
 
-// 5. Define the final API slice, now using our smart base query
 export const apiSlice = createApi({
   reducerPath: "api",
-  baseQuery: baseQueryWithReauth, // Use the wrapper
-  tagTypes: ["Product", "Category", "Order", "Chat", "Review", "Inventory"],
+  baseQuery: baseQueryWithReauth,
+  tagTypes: [
+    "Product",
+    "Category",
+    "Order",
+    "Chat",
+    "Review",
+    "Inventory",
+    "Document",
+  ],
   endpoints: (builder) => ({
-    // ALL YOUR ENDPOINTS REMAIN EXACTLY THE SAME
+    // --- PRODUCT QUERIES ---
     getProducts: builder.query<PaginatedResponse<Product>, number>({
       query: (page = 1) => `/products/?page=${page}`,
       providesTags: (result) =>
@@ -105,6 +106,10 @@ export const apiSlice = createApi({
             ]
           : [{ type: "Product", id: "LIST" }],
     }),
+    getProductById: builder.query<Product, number>({
+      query: (id) => `/products/${id}/`,
+      providesTags: (result, error, id) => [{ type: "Product", id }],
+    }),
     getCategories: builder.query<PaginatedResponse<Category>, void>({
       query: () => "/products/categories/",
       providesTags: ["Category"],
@@ -113,10 +118,105 @@ export const apiSlice = createApi({
       query: (productId) => `/products/${productId}/recommendations/`,
     }),
 
-    getProductById: builder.query<Product, number>({
-      query: (id) => `/products/${id}/`,
-      providesTags: (result, error, id) => [{ type: "Product", id }],
+    // --- PRODUCT MUTATIONS ---
+    addNewProduct: builder.mutation<Product, ProductFormData>({
+      query: (productData) => {
+        const formData = new FormData();
+        Object.entries(productData).forEach(([key, value]) => {
+          if (value !== null && value !== undefined) {
+            formData.append(key, value as string | Blob);
+          }
+        });
+        return {
+          url: "/products/admin/manage/",
+          method: "POST",
+          body: formData,
+        };
+      },
+      invalidatesTags: [{ type: "Product", id: "LIST" }, "Category"],
     }),
+    updateProduct: builder.mutation<
+      Product,
+      { id: number; data: ProductFormData }
+    >({
+      query: ({ id, data }) => {
+        const formData = new FormData();
+        Object.entries(data).forEach(([key, value]) => {
+          if (key === "image" && !value) return;
+          if (value !== null && value !== undefined) {
+            formData.append(key, value as string | Blob);
+          }
+        });
+        return {
+          url: `/products/admin/manage/${id}/`,
+          method: "PATCH",
+          body: formData,
+        };
+      },
+      invalidatesTags: (_result, _error, { id }) => [{ type: "Product", id }],
+    }),
+    deleteProduct: builder.mutation<{ success: boolean; id: number }, number>({
+      query(id) {
+        return { url: `/products/admin/manage/${id}/`, method: "DELETE" };
+      },
+      invalidatesTags: (_result, _error, id) => [
+        { type: "Product", id },
+        { type: "Product", id: "LIST" },
+      ],
+    }),
+    generateProductContent: builder.mutation<
+      AIGeneratedContent,
+      GenerateContentInput
+    >({
+      query: (data) => {
+        const formData = new FormData();
+        formData.append("name", data.name);
+        formData.append("category", data.category);
+        formData.append("image", data.image);
+        return {
+          url: "/products/admin/generate-content/",
+          method: "POST",
+          body: formData,
+        };
+      },
+    }),
+
+    // --- DOCUMENT QUERIES & MUTATIONS ---
+    getDocuments: builder.query<PaginatedResponse<Document>, void>({
+      query: () => "/qa/documents/",
+      providesTags: (result) =>
+        result && result.results
+          ? [
+              ...result.results.map(({ id }) => ({
+                type: "Document" as const,
+                id,
+              })),
+              { type: "Document", id: "LIST" },
+            ]
+          : [{ type: "Document", id: "LIST" }],
+    }),
+    uploadDocument: builder.mutation<Document, File>({
+      query: (file) => {
+        const formData = new FormData();
+        formData.append("file", file);
+        return { url: "/qa/documents/", method: "POST", body: formData };
+      },
+      invalidatesTags: [{ type: "Document", id: "LIST" }],
+    }),
+    deleteDocument: builder.mutation<{ success: boolean; id: number }, number>({
+      // --- THIS IS THE FIX ---
+      // The URL should not have a colon before the ID.
+      query: (id) => ({
+        url: `/qa/documents/${id}/`,
+        method: "DELETE",
+      }),
+      invalidatesTags: (_result, _error, id) => [
+        { type: "Document", id },
+        { type: "Document", id: "LIST" },
+      ],
+    }),
+
+    // --- OTHER QUERIES & MUTATIONS ---
     getOrders: builder.query<PaginatedResponse<Order>, number | void>({
       query: (page = 1) => `/orders/?page=${page}`,
       providesTags: (result) =>
@@ -130,20 +230,12 @@ export const apiSlice = createApi({
             ]
           : [{ type: "Order", id: "LIST" }],
     }),
-    getMessageHistory: builder.query<PaginatedResponse<Message>, number>({
-      query: (userId) => `/chat/history/${userId}/`,
-      providesTags: (result, error, userId) => [{ type: "Chat", id: userId }],
-    }),
-
-    // 2. Add new query to get reviews for a specific product
     getReviewsForProduct: builder.query<PaginatedResponse<Review>, number>({
       query: (productId) => `/products/${productId}/reviews/`,
       providesTags: (result, error, productId) => [
         { type: "Review", id: productId },
       ],
     }),
-
-    // 3. Add new mutation to post a review
     addReview: builder.mutation<
       Review,
       { productId: number; rating: number; text: string }
@@ -153,12 +245,10 @@ export const apiSlice = createApi({
         method: "POST",
         body,
       }),
-      // When a review is added, we invalidate the tag to force a refetch of the list
       invalidatesTags: (result, error, { productId }) => [
         { type: "Review", id: productId },
       ],
     }),
-
     googleLogin: builder.mutation<AuthResponse, { token: string }>({
       query: (credentials) => ({
         url: "/auth/google/",
@@ -190,80 +280,31 @@ export const apiSlice = createApi({
         body,
       }),
     }),
-    getChatUsers: builder.query<ChatUser[], void>({
-      query: () => "/chat/user-chats/",
-    }),
-    addNewProduct: builder.mutation<Product, ProductFormData>({
-      query: (initialProduct) => ({
-        url: "/products/admin/manage/",
-        method: "POST",
-        body: initialProduct,
-      }),
-      invalidatesTags: [{ type: "Product", id: "LIST" }, "Category"],
-    }),
-    updateProduct: builder.mutation<
-      Product,
-      Partial<ProductFormData> & { id: number }
-    >({
-      query: ({ id, ...patch }) => ({
-        url: `/products/admin/manage/${id}/`,
-        method: "PUT",
-        body: patch,
-      }),
-      invalidatesTags: (_result, _error, { id }) => [{ type: "Product", id }],
-    }),
-    deleteProduct: builder.mutation<{ success: boolean; id: number }, number>({
-      query(id) {
-        return {
-          url: `/products/admin/manage/${id}/`,
-          method: "DELETE",
-        };
-      },
-      invalidatesTags: (_result, _error, id) => [
-        { type: "Product", id },
-        { type: "Product", id: "LIST" },
-      ],
-    }),
-
-    //  Add the new mutation for AI content generation
-    generateProductContent: builder.mutation<
-      AIGeneratedContent,
-      { name: string; category: string; image: string }
-    >({
-      query: (productInfo) => ({
-        url: "/products/admin/generate-content/",
-        method: "POST",
-        body: productInfo,
-      }),
-    }),
-
-    // --- ADD THE NEW QUERY FOR INVENTORY INSIGHTS ---
     getInventoryInsights: builder.query<ProductInventoryInsight[], void>({
       query: () => "/products/admin/inventory-insights/",
-      // Provides a tag for this specific query, allowing for easy refetching if needed later.
       providesTags: ["Inventory"],
     }),
   }),
 });
 
-// The exported hooks remain the same
 export const {
   useGetProductsQuery,
+  useGetProductByIdQuery,
   useGetCategoriesQuery,
-  useCreatePaymentIntentMutation,
-  useGoogleLoginMutation,
-  useLoginMutation,
-  useRegisterMutation,
-  useGetChatUsersQuery,
+  useGetProductRecommendationsQuery,
   useAddNewProductMutation,
   useUpdateProductMutation,
   useDeleteProductMutation,
-  useGetOrdersQuery,
-  useGetMessageHistoryQuery,
   useGenerateProductContentMutation,
-  useGetProductByIdQuery,
+  useGetDocumentsQuery,
+  useUploadDocumentMutation,
+  useDeleteDocumentMutation,
+  useGetOrdersQuery,
   useGetReviewsForProductQuery,
   useAddReviewMutation,
-  useGetProductRecommendationsQuery,
+  useGoogleLoginMutation,
+  useLoginMutation,
+  useRegisterMutation,
+  useCreatePaymentIntentMutation,
   useGetInventoryInsightsQuery,
 } = apiSlice;

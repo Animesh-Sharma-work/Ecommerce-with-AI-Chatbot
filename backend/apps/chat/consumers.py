@@ -1,4 +1,4 @@
-# week5/backend/apps/chat/consumers.py - ENHANCED WITH DYNAMIC LOOKUP
+# week6/backend/apps/chat/consumers.py - CORRECTED VERSION
 
 import json
 import logging
@@ -7,14 +7,18 @@ from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.utils import timezone
-from django.core.exceptions import ObjectDoesNotExist
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain.schema.messages import SystemMessage, HumanMessage, AIMessage
 
+# --- THIS LINE IS NOW CORRECTED ---
+from apps.doc_qa.models import DocumentChunk
+from pgvector.django import L2Distance
+# --- END OF CORRECTION ---
+
 from .models import ChatMessage
-from apps.orders.models import Order
+from apps.ai_support.models import OrderSummary
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -30,12 +34,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         await self.accept()
         try:
-            user_name, order_summary = await self.get_user_context()
-            logger.info(f"Retrieved user context for {self.user.email}: name={user_name}, summary_length={len(order_summary) if order_summary else 0}")
-            
-            system_prompt = self.create_enhanced_system_prompt(user_name, order_summary)
             history = ChatMessageHistory()
-            
             past_messages = await self.get_last_10_messages()
             for msg in past_messages:
                 if msg.is_from_ai:
@@ -43,12 +42,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 else:
                     history.add_user_message(msg.message)
 
-            chat_sessions[self.channel_name] = {
-                "system_prompt": system_prompt, "history": history
-            }
+                 # Also send the message down to the client to populate the UI
+                await self.send(text_data=json.dumps({
+                    'id': msg.id,
+                    # Check if the message is from the AI or the user
+                    'user': 'FusionBot' if msg.is_from_ai else self.user.email,
+                    'message': msg.message,
+                    'timestamp': msg.timestamp.isoformat(),
+                }))
+            chat_sessions[self.channel_name] = {"history": history}
             logger.info(f"WebSocket session ready for user {self.user.email}")
+
         except Exception as e:
-            logger.error(f"Error during WebSocket connect for {self.user.email}: {e}")
+            logger.error(f"Error during WebSocket connect for {self.user.email}: {e}", exc_info=True)
             await self.send_error_message("Could not initialize chat session.")
             await self.close()
 
@@ -66,193 +72,117 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         try:
-            # Save the user's message
             await self.save_message(message_text, is_from_ai=False)
-
-            # Check if user is asking about specific orders and get enhanced context
-            enhanced_context = await self.get_enhanced_context_if_needed(message_text)
-
-            # Get fresh order summary
-            user_name, fresh_order_summary = await self.get_user_context()
-            
-            # Create enhanced system prompt with dynamic context
-            system_prompt = self.create_enhanced_system_prompt(
-                user_name, 
-                fresh_order_summary, 
-                enhanced_context
-            )
-
-            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=settings.GEMINI_API_KEY)
-            
-            messages = [
-                SystemMessage(content=system_prompt),
-                *session["history"].messages,
-                HumanMessage(content=message_text),
-            ]
-
-            ai_response = await llm.ainvoke(messages)
-            reply_text = ai_response.content
-
             session["history"].add_user_message(message_text)
+            intent = await self.get_question_intent(message_text)
+            logger.info(f"User question intent classified as: {intent}")
+            reply_text = ""
+            if intent == "DOCUMENTS":
+                reply_text = await self.get_rag_response(message_text, session["history"])
+            else:
+                reply_text = await self.get_order_history_response(session["history"])
             session["history"].add_ai_message(reply_text)
-
-            # Save and send response
             new_ai_message_obj = await self.save_message(reply_text, is_from_ai=True)
             await self.send(text_data=json.dumps({
-                'id': new_ai_message_obj.id,
-                'user': 'FusionBot',
-                'message': reply_text,
+                'id': new_ai_message_obj.id, 'user': 'FusionBot', 'message': reply_text,
                 'timestamp': new_ai_message_obj.timestamp.isoformat(),
             }))
-
         except Exception as e:
-            logger.error(f"Error during AI invocation for {self.user.email}: {e}")
+            logger.error(f"Error during AI invocation for {self.user.email}: {e}", exc_info=True)
             await self.send_error_message("Sorry, I encountered an error.")
 
-    async def get_enhanced_context_if_needed(self, message_text):
+    async def get_question_intent(self, question: str) -> str:
+        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=settings.GEMINI_API_KEY)
+        prompt = f"""
+        You are a routing agent. Your job is to classify the user's question into one of two categories.
+        Category 1: General Conversation & Order History.
+        Category 2: Document-Based Question. This includes any question about company policies, product specifications, terms and conditions, return policies, shipping info, etc.
+        User's Question: "{question}"
+        Respond with ONLY the word 'ORDERS' for Category 1 or 'DOCUMENTS' for Category 2.
         """
-        Check if the user is asking about specific orders and fetch detailed data
+        response = await llm.ainvoke(prompt)
+        intent = response.content.strip().upper()
+        return "DOCUMENTS" if intent == "DOCUMENTS" else "ORDERS"
+
+    async def get_rag_response(self, question: str, history: ChatMessageHistory) -> str:
+        logger.info("Performing RAG search using Django ORM and pgvector.")
+
+        embeddings_model = GoogleGenerativeAIEmbeddings(
+            model="models/embedding-001", 
+            google_api_key=settings.GEMINI_API_KEY
+        )
+        query_embedding = embeddings_model.embed_query(question)
+
+        relevant_chunks = await self.find_similar_chunks(query_embedding)
+
+        if not relevant_chunks:
+            return "I could not find any relevant information in the uploaded documents to answer your question."
+
+        context = "\n\n".join([chunk.content for chunk in relevant_chunks])
+        chat_history_text = "\n".join([f"{'User' if isinstance(msg, HumanMessage) else 'Assistant'}: {msg.content}" for msg in history.messages[:-1]])
+        
+        prompt = f"""
+        You are a helpful assistant. Answer the user's question based ONLY on the following context.
+        If the answer is not in the context, say "I could not find an answer in the provided documents."
+        Also consider the CHAT HISTORY for context on follow-up questions. Be concise and helpful.
+
+        CHAT HISTORY:
+        {chat_history_text}
+
+        CONTEXT FROM DOCUMENTS:
+        ---
+        {context}
+        ---
+
+        USER'S LATEST QUESTION: {question}
+
+        Answer:
         """
-        # Keywords that suggest user wants specific order details
-        specific_order_keywords = [
-            'second last', 'second to last', 'previous order', 'before that',
-            'third order', 'last 3 orders', 'order before', 'earlier order',
-            'what did i buy before', 'my order history', 'list my orders',
-            'show my orders', 'order details', 'which order', 'what order'
-        ]
-        
-        message_lower = message_text.lower()
-        needs_detailed_context = any(keyword in message_lower for keyword in specific_order_keywords)
-        
-        if needs_detailed_context:
-            logger.info(f"User asking for specific order details: {message_text}")
-            return await self.get_detailed_order_history()
-        
-        return None
+        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=settings.GEMINI_API_KEY)
+        response = await llm.ainvoke(prompt)
+        return response.content.strip()
 
     @database_sync_to_async
-    def get_detailed_order_history(self):
+    def find_similar_chunks(self, embedding):
+        similar_chunks = DocumentChunk.objects.annotate(
+            distance=L2Distance('embedding', embedding)
+        ).order_by('distance')[:4]
+        return list(similar_chunks)
+    
+    async def get_order_history_response(self, history: ChatMessageHistory) -> str:
+        logger.info("Generating response based on order history.")
+        user_name, order_summary = await self.get_user_context()
+        system_prompt = f"""You are "FusionBot", a friendly AI assistant. The user is {user_name}.
+        Use their order summary for context:
+        <order_summary>
+        {order_summary or "No orders yet."}
+        </order_summary>
+        Use the full conversation history. Be friendly and concise.
         """
-        Get detailed order history for specific order questions
-        """
-        try:
-            orders = Order.objects.filter(user=self.user).prefetch_related(
-                'items__product__category'
-            ).order_by('-created_at')[:5]  # Last 5 orders
-            
-            if not orders:
-                return "No orders found for this user."
-            
-            detailed_history = []
-            for i, order in enumerate(orders, 1):
-                items = []
-                for item in order.items.all():
-                    items.append(f"{item.quantity}x {item.product.name} ({item.product.category.name})")
-                
-                order_position = ""
-                if i == 1:
-                    order_position = "Most recent order (latest)"
-                elif i == 2:
-                    order_position = "Second last order"
-                elif i == 3:
-                    order_position = "Third last order"
-                else:
-                    order_position = f"Order from {i} orders ago"
-                
-                status = getattr(order, 'status', 'Shipped')
-                
-                detailed_history.append(
-                    f"{order_position}: Order #{order.id} placed on {order.created_at.strftime('%Y-%m-%d')} - "
-                    f"Items: {', '.join(items)}. Total: ${order.total_price}. Status: {status}"
-                )
-            
-            return "\n".join(detailed_history)
-            
-        except Exception as e:
-            logger.error(f"Error getting detailed order history: {e}")
-            return None
-
-    def create_enhanced_system_prompt(self, user_name, order_summary, enhanced_context=None):
-        """
-        Create system prompt with optional enhanced context for specific order questions
-        """
-        base_prompt = f"""You are "FusionBot", a friendly and helpful AI assistant for our e-commerce store, "Fusion".
-The user you are chatting with is named {user_name}.
-
-Here is an AI-generated summary of their RECENT ORDER HISTORY. Use this for context:
-<order_summary>
-{order_summary or "No orders found for this user yet."}
-</order_summary>"""
-
-        if enhanced_context:
-            base_prompt += f"""
-
-DETAILED ORDER HISTORY (for specific order questions):
-<detailed_orders>
-{enhanced_context}
-</detailed_orders>
-
-Use this detailed information to answer specific questions about their order sequence, like "what was my second last order", "what did I buy before that", or "show me my order history". Be precise with order numbers, dates, and items."""
-
-        base_prompt += """
-
-You have access to the full conversation history. Keep your responses friendly and concise. When users ask about their orders or purchase history, refer to the order information above and be as specific as possible."""
-
-        return base_prompt
+        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=settings.GEMINI_API_KEY)
+        messages = [SystemMessage(content=system_prompt), *history.messages]
+        response = await llm.ainvoke(messages)
+        return response.content.strip()
 
     async def send_error_message(self, message: str):
         await self.send(text_data=json.dumps({
-            'id': f'error-{timezone.now().isoformat()}',
-            'user': 'System', 
-            'message': message, 
-            'timestamp': timezone.now().isoformat()
+            'id': f'error-{timezone.now().isoformat()}', 'user': 'System', 
+            'message': message, 'timestamp': timezone.now().isoformat()
         }))
 
     @database_sync_to_async
     def get_user_context(self):
-        """
-        Retrieves user context including order summary with detailed logging
-        """
+        user = User.objects.get(id=self.user.id)
+        user_name = user.first_name or user.email.split('@')[0]
         try:
-            user = User.objects.get(id=self.user.id)
-            user_name = user.first_name or user.email.split('@')[0]
-            
-            # Debug: Check if user has any orders
-            order_count = Order.objects.filter(user=user).count()
-            logger.info(f"User {user.email} has {order_count} orders")
-            
-            # Try to get order summary
+            order_summary_text = OrderSummary.objects.get(user=user).summary
+        except OrderSummary.DoesNotExist:
             order_summary_text = "No orders found for this user yet."
-            try:
-                from apps.ai_support.models import OrderSummary
-                order_summary_obj = OrderSummary.objects.get(user=user)
-                order_summary_text = order_summary_obj.summary
-                logger.info(f"Found order summary for {user.email}: {order_summary_text[:100]}...")
-            except OrderSummary.DoesNotExist:
-                logger.warning(f"No OrderSummary found for user {user.email}")
-                
-                # If no summary exists but user has orders, create one
-                if order_count > 0:
-                    logger.info(f"User has {order_count} orders but no summary. Consider running generate_initial_summaries command.")
-            except Exception as e:
-                logger.error(f"Error retrieving OrderSummary for {user.email}: {e}")
-            
-            return user_name, order_summary_text
-            
-        except Exception as e:
-            logger.error(f"Error in get_user_context for user {self.user.id}: {e}")
-            raise
+        return user_name, order_summary_text
 
     @database_sync_to_async
     def save_message(self, message_text, is_from_ai):
-        """
-        Saves a message to the ChatMessage model AND RETURNS THE INSTANCE.
-        """
-        return ChatMessage.objects.create(
-            user=self.user, 
-            message=message_text, 
-            is_from_ai=is_from_ai
-        )
+        return ChatMessage.objects.create(user=self.user, message=message_text, is_from_ai=is_from_ai)
     
     @database_sync_to_async
     def get_last_10_messages(self):

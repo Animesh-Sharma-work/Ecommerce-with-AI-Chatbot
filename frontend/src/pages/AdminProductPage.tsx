@@ -9,12 +9,24 @@ import {
 } from "../features/api/apiSlice";
 import { ProductFormModal } from "../components/ProductFormModal";
 import { Pagination } from "../components/Pagination";
-import type { Product, ProductFormData } from "../types";
+import type { Product } from "../types";
+
+// This is the type the ProductFormModal will pass up in its onSave callback
+type ProductSaveData = {
+  name: string;
+  category: string;
+  price: string;
+  quantity: number;
+  description: string;
+  image: File | null; // Can be a File or null if not changed during edit
+  ai_meta_title?: string;
+  ai_meta_description?: string;
+  ai_keywords?: string;
+  ai_tags?: string;
+};
 
 export function AdminProductPage() {
   const [currentPage, setCurrentPage] = useState(1);
-
-  // Pass the current page to the query hook to fetch paginated data
   const {
     data: paginatedResponse,
     isLoading,
@@ -30,7 +42,7 @@ export function AdminProductPage() {
   const [productToEdit, setProductToEdit] = useState<Product | null>(null);
 
   const handleOpenAddModal = () => {
-    setProductToEdit(null); // Clear any product being edited
+    setProductToEdit(null);
     setIsModalOpen(true);
   };
 
@@ -41,22 +53,33 @@ export function AdminProductPage() {
 
   const handleCloseModal = () => {
     setIsModalOpen(false);
-    setProductToEdit(null); // Also clear the product on close
+    setProductToEdit(null);
   };
 
-  const handleSaveProduct = async (productData: ProductFormData) => {
+  // This function is now corrected to match the API slice definitions
+  const handleSaveProduct = async (productData: ProductSaveData) => {
     try {
       if (productToEdit) {
-        // Update existing product
-        await updateProduct({ ...productData, id: productToEdit.id }).unwrap();
+        // --- THIS IS THE FIX ---
+        // The updateProduct hook expects an object with `id` and `data` properties.
+        // We pass the product ID and the form data object separately.
+        await updateProduct({
+          id: productToEdit.id,
+          data: productData,
+        }).unwrap();
       } else {
-        // Create new product
-        await addNewProduct(productData).unwrap();
+        // The addNewProduct hook expects the productData object directly.
+        // A check ensures the image is not null for new products.
+        if (!productData.image) {
+          alert("An image is required for a new product.");
+          return;
+        }
+        await addNewProduct(productData as Required<ProductSaveData>).unwrap();
       }
-      handleCloseModal(); // Close modal on successful save
+      handleCloseModal();
     } catch (err) {
       console.error("Failed to save product:", err);
-      // Optionally, you could show an error message to the user here
+      alert("Failed to save product. Please check the console for errors.");
     }
   };
 
@@ -68,10 +91,9 @@ export function AdminProductPage() {
     return <p className="text-center text-red-400">Error loading products.</p>;
   }
 
-  // Extract data from the paginated response
   const products = paginatedResponse?.results;
   const totalProducts = paginatedResponse?.count || 0;
-  const totalPages = Math.ceil(totalProducts / 6); // Assuming PAGE_SIZE is 6
+  const totalPages = Math.ceil(totalProducts / 6);
 
   return (
     <>

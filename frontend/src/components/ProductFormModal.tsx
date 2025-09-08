@@ -1,48 +1,34 @@
 // src/components/ProductFormModal.tsx
 
 import { useState, useEffect } from "react";
-import type { Product, Category, ProductFormData } from "../types";
+import type { Product, Category } from "../types";
 import {
   useGetCategoriesQuery,
   useGenerateProductContentMutation,
 } from "../features/api/apiSlice";
 
-// Defines the expected structure of a validation error from our API.
+// Type for the data passed up to the parent component
+type ProductSaveData = {
+  name: string;
+  category: string;
+  price: string;
+  quantity: number;
+  description: string;
+  image: File | null;
+  ai_meta_title?: string;
+  ai_meta_description?: string;
+  ai_keywords?: string;
+  ai_tags?: string;
+};
+
+// Type for API error handling
 interface ApiError {
-  data: {
-    error: string;
-  };
+  data: { error: string };
 }
 
-// // A "type guard" function to safely check if an unknown error is an ApiError.
-// function isApiError(error: unknown): error is ApiError {
-//   return (
-//     typeof error === "object" &&
-//     error !== null &&
-//     "data" in error &&
-//     typeof (error as any).data === "object" &&
-//     "error" in (error as any).data
-//   );
-// }
-
-/**
- * A robust, type-safe "type guard" to check if an unknown error is an ApiError.
- * This function satisfies strict linting rules by avoiding 'any' casts. It checks
- * each property's existence and type before trying to access nested properties.
- * This is the standard way to solve the "Unexpected any" error in a catch block.
- */
 function isApiError(error: unknown): error is ApiError {
-  // 1. Ensure the error is an object and not null.
-  if (typeof error !== "object" || error === null) {
+  if (typeof error !== "object" || error === null || !("data" in error))
     return false;
-  }
-
-  // 2. Check if the 'data' property exists on the error object.
-  if (!("data" in error)) {
-    return false;
-  }
-
-  // 3. We can now safely assume 'data' exists. Let's check its contents.
   const data = (error as { data: unknown }).data;
   return (
     typeof data === "object" &&
@@ -55,7 +41,7 @@ function isApiError(error: unknown): error is ApiError {
 interface ProductFormModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (productData: ProductFormData) => void;
+  onSave: (productData: ProductSaveData) => void;
   productToEdit?: Product | null;
   isLoading?: boolean;
 }
@@ -67,116 +53,122 @@ export function ProductFormModal({
   productToEdit,
   isLoading = false,
 }: ProductFormModalProps) {
-  // RTK Query hooks for fetching categories and generating content
   const { data: paginatedCategories, isLoading: isLoadingCategories } =
     useGetCategoriesQuery();
   const [generateContent, { isLoading: isGenerating }] =
     useGenerateProductContentMutation();
 
-  const [formData, setFormData] = useState<ProductFormData>({
+  // State for text-based form fields
+  const [formData, setFormData] = useState({
     name: "",
     category: "",
     price: "0.00",
     quantity: 0,
     description: "",
-    image: "",
     ai_meta_title: "",
     ai_meta_description: "",
     ai_keywords: "",
     ai_tags: "",
   });
 
-  // State for the "new category" input field
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [newCategory, setNewCategory] = useState("");
-  // State to hold and display the AI validation error message
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  // This effect runs when the modal is opened or the product to edit changes.
-  // It populates the form for editing or resets it for creating a new product.
   useEffect(() => {
     if (productToEdit) {
-      setFormData(productToEdit);
-      setNewCategory(""); // Clear the new category field when editing
+      // --- THIS IS THE FIX ---
+      // Instead of destructuring with unused variables, we build the state object directly.
+      // This is cleaner and avoids all TypeScript/ESLint errors.
+      setFormData({
+        name: productToEdit.name,
+        category: productToEdit.category,
+        price: productToEdit.price,
+        quantity: productToEdit.quantity,
+        description: productToEdit.description,
+        // Provide default empty strings for AI fields if they are null or undefined
+        ai_meta_title: productToEdit.ai_meta_title || "",
+        ai_meta_description: productToEdit.ai_meta_description || "",
+        ai_keywords: productToEdit.ai_keywords || "",
+        ai_tags: productToEdit.ai_tags || "",
+      });
     } else {
-      // Reset form for creating a new product
+      // Reset form to its initial empty state
       setFormData({
         name: "",
         category: "",
         price: "0.00",
         quantity: 0,
         description: "",
-        image: "",
         ai_meta_title: "",
         ai_meta_description: "",
         ai_keywords: "",
         ai_tags: "",
       });
-      setNewCategory("");
     }
-    setValidationError(null); // Reset validation error when modal opens/changes
+    // Reset non-text fields separately
+    setImageFile(null);
+    setNewCategory("");
+    setValidationError(null);
   }, [productToEdit, isOpen]);
 
-  // Don't render the component if it's not open
   if (!isOpen) return null;
 
-  // Generic handler for updating form state from input changes
   const handleChange = (
     e: React.ChangeEvent<
       HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
     >
   ) => {
-    const { name, value } = e.target;
-    // When the dropdown (<select>) changes, we need to clear the 'new category' text input
-    if (name === "category") {
-      setNewCategory("");
+    const { name, value, type } = e.target;
+
+    if (type === "file") {
+      const files = (e.target as HTMLInputElement).files;
+      setImageFile(files && files.length > 0 ? files[0] : null);
+      return;
     }
+
+    if (name === "category") setNewCategory("");
     setFormData((prev) => ({
       ...prev,
       [name]: name === "quantity" ? parseInt(value, 10) || 0 : value,
     }));
   };
 
-  // Specific handler for the "new category" text input
   const handleNewCategoryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { value } = e.target;
     setNewCategory(value);
-    // When the user starts typing a new category, we clear the dropdown selection
-    if (value) {
-      setFormData((prev) => ({ ...prev, category: "" }));
-    }
+    if (value) setFormData((prev) => ({ ...prev, category: "" }));
   };
 
-  //  Handles the "Generate with AI" button click
   const handleGenerateContent = async () => {
-    setValidationError(null); // Clear previous errors before making new request
+    setValidationError(null);
     const category = newCategory.trim() || formData.category;
 
+    if (!imageFile) {
+      alert("Please select an image file before generating content.");
+      return;
+    }
+
     try {
-      // Call the mutation. .unwrap() will throw an error if the request fails.
       const aiContent = await generateContent({
         name: formData.name,
         category,
-        image: formData.image,
+        image: imageFile,
       }).unwrap();
-      // 4. On success, Update the form state with the AI's response
+
       setFormData((prev) => ({
         ...prev,
-        description: aiContent.description, // Use ai_description from backend if you changed the field name
+        description: aiContent.description,
         ai_meta_title: aiContent.meta_title,
         ai_meta_description: aiContent.meta_description,
         ai_keywords: aiContent.keywords,
         ai_tags: aiContent.tags,
-        // We need to add the AI fields to our ProductFormData type
       }));
-      // We'll also need to add inputs for the new meta fields
       alert("AI content generated and populated!");
     } catch (err) {
-      // On failure, use our type guard to safely check the error structure
       if (isApiError(err)) {
-        // If it's a known API error, display the specific message from the backend
         setValidationError(err.data.error);
       } else {
-        // Otherwise, show a generic error message
         setValidationError(
           "An unknown error occurred while generating content."
         );
@@ -186,24 +178,37 @@ export function ProductFormModal({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // Prioritize the 'newCategory' input. If it's empty, use the dropdown's value.
-    const finalFormData = {
+
+    const finalProductData: ProductSaveData = {
       ...formData,
       category: newCategory.trim() || formData.category,
+      image: imageFile,
     };
 
-    // Simple validation to ensure a category was provided
-    if (!finalFormData.category) {
+    if (!finalProductData.category) {
       alert("Please either select an existing category or enter a new one.");
       return;
     }
 
-    onSave(finalFormData);
+    if (!productToEdit && !finalProductData.image) {
+      alert("Please select an image for the new product.");
+      return;
+    }
+
+    onSave(finalProductData);
   };
 
-  // Determines if the "Generate with AI" button should be enabled
   const canGenerate =
-    formData.name && (formData.category || newCategory) && formData.image;
+    formData.name && (formData.category || newCategory) && imageFile;
+
+  let imagePreviewSrc: string | null = null;
+  if (imageFile) {
+    // If a new file is selected, create a temporary URL for its preview.
+    imagePreviewSrc = URL.createObjectURL(imageFile);
+  } else if (productToEdit && productToEdit.image) {
+    // If in edit mode and no new file is selected, use the existing image URL.
+    imagePreviewSrc = productToEdit.image;
+  }
 
   return (
     <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex justify-center items-center p-4">
@@ -222,7 +227,6 @@ export function ProductFormModal({
           </button>
         </div>
 
-        {/* This block conditionally renders the validation error message from the AI */}
         {validationError && (
           <div
             className="bg-yellow-900 border border-yellow-600 text-yellow-200 px-4 py-3 rounded-md relative mb-4 text-sm"
@@ -234,7 +238,6 @@ export function ProductFormModal({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* --- Core Product Details --- */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <input
               name="name"
@@ -244,14 +247,30 @@ export function ProductFormModal({
               required
               className="w-full p-2 bg-gray-700 rounded"
             />
-            <input
-              name="image"
-              value={formData.image}
-              onChange={handleChange}
-              placeholder="Image URL"
-              required
-              className="w-full p-2 bg-gray-700 rounded"
-            />
+            <div>
+              <label htmlFor="image-upload" className="text-sm text-gray-400">
+                Product Image
+              </label>
+              <input
+                id="image-upload"
+                name="image"
+                type="file"
+                accept="image/png, image/jpeg"
+                onChange={handleChange}
+                className="w-full p-2 bg-gray-700 rounded file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
+              />
+
+              {imagePreviewSrc && (
+                <div className="mt-4">
+                  <p className="text-sm text-gray-400 mb-2">Image Preview:</p>
+                  <img
+                    src={imagePreviewSrc}
+                    alt={imageFile ? "New image preview" : "Current image"}
+                    className="w-24 h-24 object-contain rounded-md bg-gray-700 border border-gray-600"
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -268,20 +287,19 @@ export function ProductFormModal({
             <input
               name="quantity"
               type="number"
-              value={formData.quantity}
+              value={formData.quantity.toString()}
               onChange={handleChange}
               placeholder="Stock Quantity"
               required
               className="w-full p-2 bg-gray-700 rounded"
             />
-
             <div className="space-y-2">
               <select
                 name="category"
                 value={formData.category}
                 onChange={handleChange}
                 className="w-full p-2 bg-gray-700 rounded"
-                required={!newCategory} // The dropdown is only required if the text input is empty
+                required={!newCategory}
               >
                 <option value="" disabled>
                   {isLoadingCategories ? "Loading..." : "-- Select Category --"}
@@ -302,7 +320,6 @@ export function ProductFormModal({
             </div>
           </div>
 
-          {/* --- AI Generated Content Section --- */}
           <div className="space-y-4 pt-4 border-t border-gray-700">
             <h3 className="text-lg font-semibold text-gray-300">
               Content & SEO

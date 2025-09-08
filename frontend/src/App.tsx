@@ -12,8 +12,8 @@ import { HomePage } from "./pages/HomePage";
 import { OrderHistoryPage } from "./pages/OrderHistoryPage";
 import { AdminDashboard } from "./pages/AdminDashboard";
 import { AdminProductPage } from "./pages/AdminProductPage";
-import { AdminChatPage } from "./pages/AdminChatPage";
 import { AdminInventoryPage } from "./pages/AdminInventoryPage";
+import { AdminDocumentPage } from "./pages/AdminDocumentPage";
 import { ProductDetailPage } from "./pages/ProductDetailPage";
 import { Cart } from "./components/Cart";
 import { CheckoutModal } from "./components/CheckoutModal";
@@ -90,9 +90,10 @@ function App() {
                   </p>
                 }
               />
-              <Route path="chats" element={<AdminChatPage />} />
+
               <Route path="products" element={<AdminProductPage />} />
               <Route path="inventory" element={<AdminInventoryPage />} />
+              <Route path="documents" element={<AdminDocumentPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/admin" />} />
           </>

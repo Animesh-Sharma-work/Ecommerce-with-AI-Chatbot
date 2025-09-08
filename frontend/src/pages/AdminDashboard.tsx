@@ -16,7 +16,7 @@ export function AdminDashboard() {
   };
 
   // Helper function to determine if a link is active
-  const isActive = (path: string) => location.pathname === path;
+  const isActive = (path: string) => location.pathname.startsWith(path);
 
   return (
     <div className="min-h-screen bg-gray-800 text-white flex">
@@ -49,6 +49,20 @@ export function AdminDashboard() {
                 }`}
               >
                 Inventory Insights
+              </Link>
+            </li>
+
+            {/* We are adding a new list item and Link for document management. */}
+            <li>
+              <Link
+                to="/admin/documents"
+                className={`block py-2 px-4 rounded transition-colors ${
+                  isActive("/admin/documents")
+                    ? "bg-blue-600"
+                    : "hover:bg-gray-700"
+                }`}
+              >
+                Manage Documents (Q&A)
               </Link>
             </li>
           </ul>

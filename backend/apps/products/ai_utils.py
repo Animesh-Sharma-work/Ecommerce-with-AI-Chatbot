@@ -13,7 +13,7 @@ def moderate_review_text(text: str) -> str:
     # Returns one of: 'APPROVED', 'REJECTED'
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         prompt = f"""
         You are a content moderation AI for an e-commerce platform. Your task is to classify a user-submitted review.

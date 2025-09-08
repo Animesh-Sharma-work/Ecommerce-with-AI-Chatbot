@@ -14,6 +14,8 @@ from django.db.models import Count, Q, Sum, Value, IntegerField
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from datetime import timedelta
+from PIL import Image  # Import the Image module from Pillow
+import io  # Import io to handle in-memory bytes
 
 #  Configure the library with your API key
 genai.configure(api_key=settings.GEMINI_API_KEY)
@@ -73,9 +75,9 @@ class GenerateAIContentView(APIView):
     def post(self, request, *args, **kwargs):
         product_name = request.data.get('name')
         category_name = request.data.get('category')
-        image_url = request.data.get('image')
+        image_file = request.FILES.get('image')
 
-        if not all([product_name, category_name, image_url]):
+        if not all([product_name, category_name, image_file]):
             return Response(
                 {'error': 'Product name, category and image url are required.'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -83,18 +85,21 @@ class GenerateAIContentView(APIView):
 
         try:
             # Initialize the Gemini Pro model
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            
+              # --- Read image bytes into memory ---
+            image_bytes = image_file.read()
+            pil_image = Image.open(io.BytesIO(image_bytes))
 
             # Craft a detailed prompt for the AI
             prompt = f"""
             You are an e-commerce product analyst. Your task is to perform two steps:
-            1.  **Validation**: Analyze the user-provided image from the URL and the product name to determine if they are a plausible match for the same product listing.
+            1.  **Validation**: Analyze the user-provided image and the product name to determine if they are a plausible match for the same product listing.
             2.  **Content Generation**: If they match, generate marketing content.
 
             **Product Details:**
             - Product Name: "{product_name}"
             - Category: "{category_name}"
-            - Image URL: "{image_url}"
 
             **Validation Rules:**
             - Your primary goal is to check if the CORE OBJECT in the image matches the CORE OBJECT in the product name.
@@ -123,7 +128,7 @@ class GenerateAIContentView(APIView):
             """
 
             # Make the API call to Gemini
-            response = model.generate_content(prompt)
+            response = model.generate_content([prompt, pil_image])
             
             # The response text should be a JSON string. We need to clean and parse it.
             response_text = response.text.strip().replace('```json', '').replace('```', '')
